@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { md5 } from 'js-md5'
+import CryptoJS from 'crypto-js'
 import { ESPLoader, Transport } from 'esptool-js'
 
 type FlashFileEntry = {
@@ -90,6 +90,10 @@ function uint8ArrayToBinaryString(bytes: Uint8Array): string {
   return result
 }
 
+function md5BinaryString(binary: string): string {
+  return CryptoJS.MD5(CryptoJS.enc.Latin1.parse(binary)).toString()
+}
+
 async function connectAndFlash(): Promise<void> {
   try {
     const nav = navigator as Navigator & {
@@ -173,7 +177,7 @@ async function connectAndFlash(): Promise<void> {
       },
       calculateMD5Hash: (image: string) => {
         appendLog(`MD5 input length: ${image.length}`)
-        return md5(image)
+        return md5BinaryString(image)
       }
     })
 
