@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import * as md5 from 'js-md5'
+import { md5 } from 'js-md5'
 import { ESPLoader, Transport } from 'esptool-js'
 
 type FlashFileEntry = {
@@ -87,7 +87,7 @@ function md5FromUint8Array(image: Uint8Array): string {
     binary += String.fromCharCode(...chunk)
   }
 
-  return md5.default(binary)
+  return md5(binary)
 }
 
 async function connectAndFlash(): Promise<void> {
@@ -125,7 +125,7 @@ async function connectAndFlash(): Promise<void> {
 
     statusText.value = 'Подключение к ESP32-P4...'
     appendLog('Инициализация ESPLoader...')
-    const chip = await esploader.main()
+    const chip = await (esploader as any).main()
     appendLog(`Подключено к чипу: ${chip}`)
     appendLog(`typeof esploader.writeFlash = ${typeof (esploader as any).writeFlash}`)
 
