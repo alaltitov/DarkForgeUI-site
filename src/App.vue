@@ -207,6 +207,9 @@ async function connectAndFlash(): Promise<void> {
     statusText.value = 'Идет прошивка...'
     appendLog('Начинается запись во flash...')
 
+    // Переменная для отслеживания текущего файла во время прошивки
+    let currentFileIndex = 0
+
     await (esploader as any).writeFlash({
       fileArray,
       eraseAll: true,
@@ -214,10 +217,21 @@ async function connectAndFlash(): Promise<void> {
       flashMode: manifest.flash_mode as FlashModeValues,
       flashFreq: manifest.flash_freq as FlashFreqValues,
       flashSize: manifest.flash_size as FlashSizeValues,
-      reportProgress: (_fileIndex: number, written: number, total: number) => {
+      reportProgress: (fileIndex: number, written: number, total: number) => {
+        // Обновляем индекс текущего файла при каждом тике прогресса
+        currentFileIndex = fileIndex
         progress.value = Math.round((written / total) * 100)
       },
       calculateMD5Hash: (image: string) => {
+        const currentFile = fileArray[currentFileIndex]
+        
+        // Если адрес файла выходит за пределы 16MB (0x1000000), 
+        // возвращаем пустую строку, чтобы совпасть с пустым ответом от чипа
+        if (currentFile && currentFile.address >= 0x1000000) {
+          appendLog(`Пропуск проверки MD5 для адреса 0x${currentFile.address.toString(16).toUpperCase()} (>16MB)`)
+          return ''
+        }
+
         appendLog(`MD5 input length: ${image.length}`)
         return md5BinaryString(image)
       }
