@@ -90,9 +90,12 @@ function uint8ArrayToBinaryString(bytes: Uint8Array): string {
   for (let i = 0; i < bytes.length; i += chunkSize) {
     const chunk = bytes.subarray(i, i + chunkSize)
     let chunkString = ''
+
     for (let j = 0; j < chunk.length; j++) {
-      chunkString += String.fromCharCode(chunk[j])
+      const value = chunk[j]
+      chunkString += String.fromCharCode(value ?? 0)
     }
+
     result += chunkString
   }
 
