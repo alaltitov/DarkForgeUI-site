@@ -46,7 +46,7 @@ type FlashSizeValues =
   | '128MB'
 
 type FlashFile = {
-  data: string
+  data: Uint8Array
   address: number
 }
 
@@ -62,36 +62,72 @@ function appendLog(message: string): void {
   console.log(message)
 }
 
-async function fetchBinary(url: string): Promise<ArrayBuffer> {
-  const response = await fetch(url)
-  if (!response.ok) {
-    throw new Error(`Не удалось загрузить бинарник: ${url}`)
-  }
-  return await response.arrayBuffer()
-}
-
 async function fetchJson<T>(url: string): Promise<T> {
-  const response = await fetch(url)
+  const response = await fetch(url, { cache: 'no-store' })
   if (!response.ok) {
     throw new Error(`Не удалось загрузить JSON: ${url}`)
   }
   return (await response.json()) as T
 }
 
-function uint8ArrayToBinaryString(bytes: Uint8Array): string {
-  let result = ''
-  const chunkSize = 0x8000
-
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    const chunk = bytes.subarray(i, i + chunkSize)
-    result += String.fromCharCode(...chunk)
-  }
-
-  return result
+function toHexPreview(bytes: Uint8Array, count = 16): string {
+  return Array.from(bytes.slice(0, count))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join(' ')
 }
 
-function md5BinaryString(binary: string): string {
-  return CryptoJS.MD5(CryptoJS.enc.Latin1.parse(binary)).toString()
+function toHexTail(bytes: Uint8Array, count = 16): string {
+  const start = Math.max(0, bytes.length - count)
+  return Array.from(bytes.slice(start))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join(' ')
+}
+
+function uint8ArrayToWordArray(u8: Uint8Array) {
+  const words: number[] = []
+  let i = 0
+
+  while (i < u8.length) {
+    words.push(
+      ((u8[i] ?? 0) << 24) |
+      ((u8[i + 1] ?? 0) << 16) |
+      ((u8[i + 2] ?? 0) << 8) |
+      (u8[i + 3] ?? 0)
+    )
+    i += 4
+  }
+
+  return CryptoJS.lib.WordArray.create(words, u8.length)
+}
+
+function md5FromUint8Array(bytes: Uint8Array): string {
+  return CryptoJS.MD5(uint8ArrayToWordArray(bytes)).toString()
+}
+
+async function fetchBinaryWithLogs(path: string): Promise<Uint8Array> {
+  const url = `/DarkForgeUI-site/firmware/${path}`
+  const response = await fetch(url, { cache: 'no-store' })
+
+  appendLog(
+    `${path}: status=${response.status}, content-type=${response.headers.get('content-type') ?? 'unknown'}, content-length=${response.headers.get('content-length') ?? 'unknown'}`
+  )
+
+  if (!response.ok) {
+    throw new Error(`Не удалось загрузить бинарник: ${url}`)
+  }
+
+  const buffer = await response.arrayBuffer()
+  const bytes = new Uint8Array(buffer)
+
+  appendLog(`Файл ${path}: ${bytes.length} bytes`)
+
+  if (path === 'srmodels.bin') {
+    appendLog(`srmodels head: ${toHexPreview(bytes)}`)
+    appendLog(`srmodels tail: ${toHexTail(bytes)}`)
+    appendLog(`srmodels md5(local raw): ${md5FromUint8Array(bytes)}`)
+  }
+
+  return bytes
 }
 
 async function connectAndFlash(): Promise<void> {
@@ -129,6 +165,7 @@ async function connectAndFlash(): Promise<void> {
 
     statusText.value = 'Подключение к ESP32-P4...'
     appendLog('Инициализация ESPLoader...')
+
     const chip = await (esploader as any).main()
     appendLog(`Подключено к чипу: ${chip}`)
     appendLog(`typeof esploader.writeFlash = ${typeof (esploader as any).writeFlash}`)
@@ -148,15 +185,10 @@ async function connectAndFlash(): Promise<void> {
     const fileArray: FlashFile[] = await Promise.all(
       manifest.files.map(async (file) => {
         appendLog(`Загрузка ${file.path} @ 0x${file.address.toString(16).toUpperCase()}`)
-
-        const buffer = await fetchBinary(`/DarkForgeUI-site/firmware/${file.path}`)
-        const bytes = new Uint8Array(buffer)
-        const binaryString = uint8ArrayToBinaryString(bytes)
-
-        appendLog(`Файл ${file.path}: ${bytes.length} bytes`)
+        const bytes = await fetchBinaryWithLogs(file.path)
 
         return {
-          data: binaryString,
+          data: bytes,
           address: file.address
         }
       })
@@ -175,9 +207,9 @@ async function connectAndFlash(): Promise<void> {
       reportProgress: (_fileIndex: number, written: number, total: number) => {
         progress.value = Math.round((written / total) * 100)
       },
-      calculateMD5Hash: (image: string) => {
+      calculateMD5Hash: (image: Uint8Array) => {
         appendLog(`MD5 input length: ${image.length}`)
-        return md5BinaryString(image)
+        return md5FromUint8Array(image)
       }
     })
 
@@ -265,7 +297,7 @@ body {
   border: 1px solid #30363d;
   text-align: center;
   width: 100%;
-  max-width: 460px;
+  max-width: 520px;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
 }
 
@@ -291,6 +323,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
+  text-align: center;
 }
 
 .progress-wrap {
@@ -362,7 +395,7 @@ button:disabled {
 }
 
 .log-content {
-  max-height: 220px;
+  max-height: 320px;
   overflow: auto;
   padding: 10px 12px;
 }
