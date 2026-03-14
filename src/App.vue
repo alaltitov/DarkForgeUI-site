@@ -46,7 +46,7 @@ type FlashSizeValues =
   | '128MB'
 
 type FlashFile = {
-  data: Uint8Array
+  data: string
   address: number
 }
 
@@ -83,28 +83,27 @@ function toHexTail(bytes: Uint8Array, count = 16): string {
     .join(' ')
 }
 
-function uint8ArrayToWordArray(u8: Uint8Array) {
-  const words: number[] = []
-  let i = 0
+function uint8ArrayToBinaryString(bytes: Uint8Array): string {
+  let result = ''
+  const chunkSize = 0x8000
 
-  while (i < u8.length) {
-    words.push(
-      ((u8[i] ?? 0) << 24) |
-      ((u8[i + 1] ?? 0) << 16) |
-      ((u8[i + 2] ?? 0) << 8) |
-      (u8[i + 3] ?? 0)
-    )
-    i += 4
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize)
+    let chunkString = ''
+    for (let j = 0; j < chunk.length; j++) {
+      chunkString += String.fromCharCode(chunk[j])
+    }
+    result += chunkString
   }
 
-  return CryptoJS.lib.WordArray.create(words, u8.length)
+  return result
 }
 
-function md5FromUint8Array(bytes: Uint8Array): string {
-  return CryptoJS.MD5(uint8ArrayToWordArray(bytes)).toString()
+function md5BinaryString(binary: string): string {
+  return CryptoJS.MD5(CryptoJS.enc.Latin1.parse(binary)).toString()
 }
 
-async function fetchBinaryWithLogs(path: string): Promise<Uint8Array> {
+async function fetchBinaryWithLogs(path: string): Promise<{ bytes: Uint8Array; binary: string }> {
   const url = `/DarkForgeUI-site/firmware/${path}`
   const response = await fetch(url, { cache: 'no-store' })
 
@@ -122,12 +121,19 @@ async function fetchBinaryWithLogs(path: string): Promise<Uint8Array> {
   appendLog(`Файл ${path}: ${bytes.length} bytes`)
 
   if (path === 'srmodels.bin') {
-    appendLog(`srmodels head: ${toHexPreview(bytes)}`)
-    appendLog(`srmodels tail: ${toHexTail(bytes)}`)
-    appendLog(`srmodels md5(local raw): ${md5FromUint8Array(bytes)}`)
+    appendLog(`srmodels head(bytes): ${toHexPreview(bytes)}`)
+    appendLog(`srmodels tail(bytes): ${toHexTail(bytes)}`)
   }
 
-  return bytes
+  const binary = uint8ArrayToBinaryString(bytes)
+
+  appendLog(`Binary string length ${path}: ${binary.length}`)
+
+  if (path === 'srmodels.bin') {
+    appendLog(`srmodels md5(local raw bytes->binary): ${md5BinaryString(binary)}`)
+  }
+
+  return { bytes, binary }
 }
 
 async function connectAndFlash(): Promise<void> {
@@ -185,10 +191,11 @@ async function connectAndFlash(): Promise<void> {
     const fileArray: FlashFile[] = await Promise.all(
       manifest.files.map(async (file) => {
         appendLog(`Загрузка ${file.path} @ 0x${file.address.toString(16).toUpperCase()}`)
-        const bytes = await fetchBinaryWithLogs(file.path)
+
+        const { binary } = await fetchBinaryWithLogs(file.path)
 
         return {
-          data: bytes,
+          data: binary,
           address: file.address
         }
       })
@@ -207,9 +214,9 @@ async function connectAndFlash(): Promise<void> {
       reportProgress: (_fileIndex: number, written: number, total: number) => {
         progress.value = Math.round((written / total) * 100)
       },
-      calculateMD5Hash: (image: Uint8Array) => {
+      calculateMD5Hash: (image: string) => {
         appendLog(`MD5 input length: ${image.length}`)
-        return md5FromUint8Array(image)
+        return md5BinaryString(image)
       }
     })
 
