@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import md5 from 'js-md5'
 import { ESPLoader, Transport } from 'esptool-js'
 
 type FlashFileEntry = {
@@ -12,6 +13,41 @@ type FlashManifest = {
   flash_freq: string
   flash_size: string
   files: FlashFileEntry[]
+}
+
+type FlashModeValues = 'qio' | 'qout' | 'dio' | 'dout' | 'keep'
+type FlashFreqValues =
+  | 'keep'
+  | '80m'
+  | '60m'
+  | '48m'
+  | '40m'
+  | '30m'
+  | '26m'
+  | '24m'
+  | '20m'
+  | '16m'
+  | '15m'
+  | '12m'
+type FlashSizeValues =
+  | 'detect'
+  | 'keep'
+  | '256KB'
+  | '512KB'
+  | '1MB'
+  | '2MB'
+  | '2MB-c1'
+  | '4MB'
+  | '4MB-c1'
+  | '8MB'
+  | '16MB'
+  | '32MB'
+  | '64MB'
+  | '128MB'
+
+type FlashFile = {
+  data: Uint8Array
+  address: number
 }
 
 const isFlashing = ref<boolean>(false)
@@ -39,7 +75,19 @@ async function fetchJson<T>(url: string): Promise<T> {
   if (!response.ok) {
     throw new Error(`Не удалось загрузить JSON: ${url}`)
   }
-  return await response.json() as Promise<T>
+  return (await response.json()) as T
+}
+
+function md5FromUint8Array(image: Uint8Array): string {
+  let binary = ''
+  const chunkSize = 0x8000
+
+  for (let i = 0; i < image.length; i += chunkSize) {
+    const chunk = image.subarray(i, i + chunkSize)
+    binary += String.fromCharCode(...chunk)
+  }
+
+  return md5(binary)
 }
 
 async function connectAndFlash(): Promise<void> {
@@ -59,7 +107,7 @@ async function connectAndFlash(): Promise<void> {
     appendLog('Запрос порта у пользователя...')
 
     const port = await nav.serial.requestPort()
-    const transport = new Transport(port)
+    const transport = new Transport(port, true)
 
     esploader = new ESPLoader({
       transport,
@@ -73,7 +121,9 @@ async function connectAndFlash(): Promise<void> {
 
     statusText.value = 'Подключение к ESP32-P4...'
     appendLog('Инициализация ESPLoader...')
-    await esploader.main()
+    const chip = await esploader.main()
+    appendLog(`Подключено к чипу: ${chip}`)
+    appendLog(`typeof esploader.writeFlash = ${typeof esploader.writeFlash}`)
 
     statusText.value = 'Загрузка плана прошивки...'
     appendLog('Загрузка flash_args.json...')
@@ -87,10 +137,11 @@ async function connectAndFlash(): Promise<void> {
 
     statusText.value = 'Загрузка бинарников прошивки...'
 
-    const fileArray = await Promise.all(
+    const fileArray: FlashFile[] = await Promise.all(
       manifest.files.map(async (file) => {
         appendLog(`Загрузка ${file.path} @ 0x${file.address.toString(16).toUpperCase()}`)
         const buffer = await fetchBinary(`/DarkForgeUI-site/firmware/${file.path}`)
+
         return {
           data: new Uint8Array(buffer),
           address: file.address
@@ -101,36 +152,34 @@ async function connectAndFlash(): Promise<void> {
     statusText.value = 'Идет прошивка...'
     appendLog('Начинается запись во flash...')
 
-    await esploader.write_flash({
+    await esploader.writeFlash({
       fileArray,
-      flash_size: manifest.flash_size,
-      flash_mode: manifest.flash_mode,
-      flash_freq: manifest.flash_freq,
-      erase_all: true,
+      eraseAll: true,
       compress: true,
+      flashMode: manifest.flash_mode as FlashModeValues,
+      flashFreq: manifest.flash_freq as FlashFreqValues,
+      flashSize: manifest.flash_size as FlashSizeValues,
       reportProgress: (_fileIndex: number, written: number, total: number) => {
         progress.value = Math.round((written / total) * 100)
+      },
+      calculateMD5Hash: (image: Uint8Array) => {
+        return md5FromUint8Array(image)
       }
     })
+
+    appendLog('Запись завершена, выполняется after()...')
+    await esploader.after()
 
     progress.value = 100
     statusText.value = 'Прошивка завершена! 🚀'
     appendLog('Прошивка успешно завершена.')
-
-    try {
-      appendLog('Выполняется hard reset...')
-      await esploader.hardReset()
-      appendLog('Устройство перезагружено.')
-    } catch (resetError) {
-      appendLog(`Не удалось выполнить hard reset: ${String(resetError)}`)
-    }
   } catch (error: any) {
     const message = error?.message || String(error)
     statusText.value = `Ошибка: ${message}`
     appendLog(`Ошибка: ${message}`)
     console.error(error)
   } finally {
-    if (esploader) {
+    if (esploader?.transport) {
       try {
         appendLog('Отключение транспорта...')
         await esploader.transport.disconnect()
