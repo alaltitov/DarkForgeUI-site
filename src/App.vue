@@ -46,7 +46,7 @@ type FlashSizeValues =
   | '128MB'
 
 type FlashFile = {
-  data: Uint8Array
+  data: string
   address: number
 }
 
@@ -78,20 +78,16 @@ async function fetchJson<T>(url: string): Promise<T> {
   return (await response.json()) as T
 }
 
-function md5FromData(image: unknown): string {
-  if (image instanceof Uint8Array) {
-    return md5(Array.from(image))
+function uint8ArrayToBinaryString(bytes: Uint8Array): string {
+  let result = ''
+  const chunkSize = 0x8000
+
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize)
+    result += String.fromCharCode(...chunk)
   }
 
-  if (image instanceof ArrayBuffer) {
-    return md5(Array.from(new Uint8Array(image)))
-  }
-
-  if (Array.isArray(image)) {
-    return md5(image)
-  }
-
-  throw new Error(`calculateMD5Hash получил неподдерживаемый тип: ${Object.prototype.toString.call(image)}`)
+  return result
 }
 
 async function connectAndFlash(): Promise<void> {
@@ -148,10 +144,15 @@ async function connectAndFlash(): Promise<void> {
     const fileArray: FlashFile[] = await Promise.all(
       manifest.files.map(async (file) => {
         appendLog(`Загрузка ${file.path} @ 0x${file.address.toString(16).toUpperCase()}`)
+
         const buffer = await fetchBinary(`/DarkForgeUI-site/firmware/${file.path}`)
+        const bytes = new Uint8Array(buffer)
+        const binaryString = uint8ArrayToBinaryString(bytes)
+
+        appendLog(`Файл ${file.path}: ${bytes.length} bytes`)
 
         return {
-          data: new Uint8Array(buffer),
+          data: binaryString,
           address: file.address
         }
       })
@@ -170,9 +171,9 @@ async function connectAndFlash(): Promise<void> {
       reportProgress: (_fileIndex: number, written: number, total: number) => {
         progress.value = Math.round((written / total) * 100)
       },
-      calculateMD5Hash: (image: unknown) => {
-        appendLog(`MD5 input type: ${Object.prototype.toString.call(image)}`)
-        return md5FromData(image)
+      calculateMD5Hash: (image: string) => {
+        appendLog(`MD5 input length: ${image.length}`)
+        return md5(image)
       }
     })
 
