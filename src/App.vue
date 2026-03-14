@@ -38,7 +38,7 @@ async function connectAndFlash(): Promise<void> {
         clean: () => {},
         writeLine: (data: string) => console.log(data),
         write: (data: string) => console.log(data)
-      }
+      } as any
     })
 
     statusText.value = 'Подключение к ESP32-P4...'
