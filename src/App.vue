@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import md5 from 'js-md5'
+import * as md5 from 'js-md5'
 import { ESPLoader, Transport } from 'esptool-js'
 
 type FlashFileEntry = {
@@ -50,12 +50,12 @@ type FlashFile = {
   address: number
 }
 
-const isFlashing = ref<boolean>(false)
-const progress = ref<number>(0)
-const statusText = ref<string>('Готово к прошивке')
+const isFlashing = ref(false)
+const progress = ref(0)
+const statusText = ref('Готово к прошивке')
 const logLines = ref<string[]>([])
 
-let esploader: any = null
+let esploader: ESPLoader | null = null
 
 function appendLog(message: string): void {
   logLines.value.push(message)
@@ -87,12 +87,16 @@ function md5FromUint8Array(image: Uint8Array): string {
     binary += String.fromCharCode(...chunk)
   }
 
-  return md5(binary)
+  return md5.default(binary)
 }
 
 async function connectAndFlash(): Promise<void> {
   try {
-    const nav = navigator as any
+    const nav = navigator as Navigator & {
+      serial?: {
+        requestPort: () => Promise<unknown>
+      }
+    }
 
     if (!nav.serial) {
       throw new Error('Web Serial API не поддерживается вашим браузером. Используйте Chrome или Edge.')
@@ -107,7 +111,7 @@ async function connectAndFlash(): Promise<void> {
     appendLog('Запрос порта у пользователя...')
 
     const port = await nav.serial.requestPort()
-    const transport = new Transport(port, true)
+    const transport = new Transport(port as any, true)
 
     esploader = new ESPLoader({
       transport,
@@ -123,7 +127,7 @@ async function connectAndFlash(): Promise<void> {
     appendLog('Инициализация ESPLoader...')
     const chip = await esploader.main()
     appendLog(`Подключено к чипу: ${chip}`)
-    appendLog(`typeof esploader.writeFlash = ${typeof esploader.writeFlash}`)
+    appendLog(`typeof esploader.writeFlash = ${typeof (esploader as any).writeFlash}`)
 
     statusText.value = 'Загрузка плана прошивки...'
     appendLog('Загрузка flash_args.json...')
@@ -152,7 +156,7 @@ async function connectAndFlash(): Promise<void> {
     statusText.value = 'Идет прошивка...'
     appendLog('Начинается запись во flash...')
 
-    await esploader.writeFlash({
+    await (esploader as any).writeFlash({
       fileArray,
       eraseAll: true,
       compress: true,
@@ -168,22 +172,22 @@ async function connectAndFlash(): Promise<void> {
     })
 
     appendLog('Запись завершена, выполняется after()...')
-    await esploader.after()
+    await (esploader as any).after()
 
     progress.value = 100
     statusText.value = 'Прошивка завершена! 🚀'
     appendLog('Прошивка успешно завершена.')
-  } catch (error: any) {
-    const message = error?.message || String(error)
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error)
     statusText.value = `Ошибка: ${message}`
     appendLog(`Ошибка: ${message}`)
     console.error(error)
   } finally {
-    if (esploader?.transport) {
+    if (esploader) {
       try {
         appendLog('Отключение транспорта...')
-        await esploader.transport.disconnect()
-      } catch (disconnectError) {
+        await (esploader as any).transport.disconnect()
+      } catch (disconnectError: unknown) {
         appendLog(`Ошибка отключения: ${String(disconnectError)}`)
       }
     }
@@ -201,18 +205,18 @@ async function connectAndFlash(): Promise<void> {
 
       <p class="status">{{ statusText }}</p>
 
-      <div class="progress-wrap" v-if="progress > 0">
+      <div v-if="progress > 0" class="progress-wrap">
         <div class="progress-bg">
           <div class="progress-fill" :style="{ width: progress + '%' }"></div>
         </div>
         <p class="progress-text">{{ progress }}%</p>
       </div>
 
-      <button @click="connectAndFlash" :disabled="isFlashing">
+      <button :disabled="isFlashing" @click="connectAndFlash">
         {{ isFlashing ? 'Идет прошивка...' : 'Подключить и прошить' }}
       </button>
 
-      <div class="log-panel" v-if="logLines.length > 0">
+      <div v-if="logLines.length > 0" class="log-panel">
         <div class="log-title">Лог</div>
         <div class="log-content">
           <div v-for="(line, index) in logLines" :key="index" class="log-line">
