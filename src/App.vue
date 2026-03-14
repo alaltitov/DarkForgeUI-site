@@ -78,16 +78,20 @@ async function fetchJson<T>(url: string): Promise<T> {
   return (await response.json()) as T
 }
 
-function md5FromUint8Array(image: Uint8Array): string {
-  let binary = ''
-  const chunkSize = 0x8000
-
-  for (let i = 0; i < image.length; i += chunkSize) {
-    const chunk = image.subarray(i, i + chunkSize)
-    binary += String.fromCharCode(...chunk)
+function md5FromData(image: unknown): string {
+  if (image instanceof Uint8Array) {
+    return md5(Array.from(image))
   }
 
-  return md5(binary)
+  if (image instanceof ArrayBuffer) {
+    return md5(Array.from(new Uint8Array(image)))
+  }
+
+  if (Array.isArray(image)) {
+    return md5(image)
+  }
+
+  throw new Error(`calculateMD5Hash получил неподдерживаемый тип: ${Object.prototype.toString.call(image)}`)
 }
 
 async function connectAndFlash(): Promise<void> {
@@ -166,8 +170,9 @@ async function connectAndFlash(): Promise<void> {
       reportProgress: (_fileIndex: number, written: number, total: number) => {
         progress.value = Math.round((written / total) * 100)
       },
-      calculateMD5Hash: (image: Uint8Array) => {
-        return md5FromUint8Array(image)
+      calculateMD5Hash: (image: unknown) => {
+        appendLog(`MD5 input type: ${Object.prototype.toString.call(image)}`)
+        return md5FromData(image)
       }
     })
 
