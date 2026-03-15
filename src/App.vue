@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import CryptoJS from 'crypto-js'
 import { ESPLoader, Transport } from 'esptool-js'
 
 type FlashFileEntry = {
@@ -45,8 +44,9 @@ type FlashSizeValues =
   | '64MB'
   | '128MB'
 
+// Теперь data это Uint8Array, как требует новый API
 type FlashFile = {
-  data: string
+  data: Uint8Array
   address: number
 }
 
@@ -70,43 +70,8 @@ async function fetchJson<T>(url: string): Promise<T> {
   return (await response.json()) as T
 }
 
-function toHexPreview(bytes: Uint8Array, count = 16): string {
-  return Array.from(bytes.slice(0, count))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join(' ')
-}
-
-function toHexTail(bytes: Uint8Array, count = 16): string {
-  const start = Math.max(0, bytes.length - count)
-  return Array.from(bytes.slice(start))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join(' ')
-}
-
-function uint8ArrayToBinaryString(bytes: Uint8Array): string {
-  let result = ''
-  const chunkSize = 0x8000
-
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    const chunk = bytes.subarray(i, i + chunkSize)
-    let chunkString = ''
-
-    for (let j = 0; j < chunk.length; j++) {
-      const value = chunk[j]
-      chunkString += String.fromCharCode(value ?? 0)
-    }
-
-    result += chunkString
-  }
-
-  return result
-}
-
-function md5BinaryString(binary: string): string {
-  return CryptoJS.MD5(CryptoJS.enc.Latin1.parse(binary)).toString()
-}
-
-async function fetchBinaryWithLogs(path: string): Promise<{ bytes: Uint8Array; binary: string }> {
+// Функция загрузки теперь возвращает только Uint8Array
+async function fetchBinaryWithLogs(path: string): Promise<Uint8Array> {
   const url = `/DarkForgeUI-site/firmware/${path}`
   const response = await fetch(url, { cache: 'no-store' })
 
@@ -121,22 +86,9 @@ async function fetchBinaryWithLogs(path: string): Promise<{ bytes: Uint8Array; b
   const buffer = await response.arrayBuffer()
   const bytes = new Uint8Array(buffer)
 
-  appendLog(`Файл ${path}: ${bytes.length} bytes`)
+  appendLog(`Файл ${path}: ${bytes.length} bytes загружен успешно.`)
 
-  if (path === 'srmodels.bin') {
-    appendLog(`srmodels head(bytes): ${toHexPreview(bytes)}`)
-    appendLog(`srmodels tail(bytes): ${toHexTail(bytes)}`)
-  }
-
-  const binary = uint8ArrayToBinaryString(bytes)
-
-  appendLog(`Binary string length ${path}: ${binary.length}`)
-
-  if (path === 'srmodels.bin') {
-    appendLog(`srmodels md5(local raw bytes->binary): ${md5BinaryString(binary)}`)
-  }
-
-  return { bytes, binary }
+  return bytes
 }
 
 async function connectAndFlash(): Promise<void> {
@@ -164,7 +116,7 @@ async function connectAndFlash(): Promise<void> {
 
     esploader = new ESPLoader({
       transport,
-      baudrate: 115200,
+      baudrate: 460800, // Увеличил baudrate для скорости, как в issue
       terminal: {
         clean: () => {},
         writeLine: (data: string) => appendLog(data),
@@ -177,7 +129,6 @@ async function connectAndFlash(): Promise<void> {
 
     const chip = await (esploader as any).main()
     appendLog(`Подключено к чипу: ${chip}`)
-    appendLog(`typeof esploader.writeFlash = ${typeof (esploader as any).writeFlash}`)
 
     statusText.value = 'Загрузка плана прошивки...'
     appendLog('Загрузка flash_args.json...')
@@ -191,14 +142,14 @@ async function connectAndFlash(): Promise<void> {
 
     statusText.value = 'Загрузка бинарников прошивки...'
 
+    // Формируем массив файлов, передавая Uint8Array напрямую
     const fileArray: FlashFile[] = await Promise.all(
       manifest.files.map(async (file) => {
         appendLog(`Загрузка ${file.path} @ 0x${file.address.toString(16).toUpperCase()}`)
-
-        const { binary } = await fetchBinaryWithLogs(file.path)
+        const bytes = await fetchBinaryWithLogs(file.path)
 
         return {
-          data: binary,
+          data: bytes,
           address: file.address
         }
       })
@@ -207,9 +158,6 @@ async function connectAndFlash(): Promise<void> {
     statusText.value = 'Идет прошивка...'
     appendLog('Начинается запись во flash...')
 
-    // Переменная для отслеживания текущего файла во время прошивки
-    let currentFileIndex = 0
-
     await (esploader as any).writeFlash({
       fileArray,
       eraseAll: true,
@@ -217,24 +165,10 @@ async function connectAndFlash(): Promise<void> {
       flashMode: manifest.flash_mode as FlashModeValues,
       flashFreq: manifest.flash_freq as FlashFreqValues,
       flashSize: manifest.flash_size as FlashSizeValues,
-      reportProgress: (fileIndex: number, written: number, total: number) => {
-        // Обновляем индекс текущего файла при каждом тике прогресса
-        currentFileIndex = fileIndex
+      reportProgress: (_fileIndex: number, written: number, total: number) => {
         progress.value = Math.round((written / total) * 100)
-      },
-      calculateMD5Hash: (image: string) => {
-        const currentFile = fileArray[currentFileIndex]
-        
-        // Если адрес файла выходит за пределы 16MB (0x1000000), 
-        // возвращаем пустую строку, чтобы совпасть с пустым ответом от чипа
-        if (currentFile && currentFile.address >= 0x1000000) {
-          appendLog(`Пропуск проверки MD5 для адреса 0x${currentFile.address.toString(16).toUpperCase()} (>16MB)`)
-          return ''
-        }
-
-        appendLog(`MD5 input length: ${image.length}`)
-        return md5BinaryString(image)
       }
+      // calculateMD5Hash больше не передаем! Библиотека сама посчитает его из Uint8Array
     })
 
     appendLog('Запись завершена, выполняется after()...')
@@ -295,6 +229,7 @@ async function connectAndFlash(): Promise<void> {
 </template>
 
 <style>
+/* Стили остались без изменений */
 body {
   margin: 0;
   background-color: #0d1117;
