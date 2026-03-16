@@ -16,7 +16,7 @@
   },
   "dependencies": {
     "crypto-js": "^4.2.0",
-    "esptool-js": "^0.5.7",
+    "esptool-js": "github:espressif/esptool-js#main",
     "pinia": "^3.0.4",
     "vue": "^3.5.29",
     "vue-router": "^5.0.3"
