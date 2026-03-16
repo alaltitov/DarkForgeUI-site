@@ -15,36 +15,10 @@ type FlashManifest = {
 }
 
 type FlashModeValues = 'qio' | 'qout' | 'dio' | 'dout' | 'keep'
-type FlashFreqValues =
-  | 'keep'
-  | '80m'
-  | '60m'
-  | '48m'
-  | '40m'
-  | '30m'
-  | '26m'
-  | '24m'
-  | '20m'
-  | '16m'
-  | '15m'
-  | '12m'
-type FlashSizeValues =
-  | 'detect'
-  | 'keep'
-  | '256KB'
-  | '512KB'
-  | '1MB'
-  | '2MB'
-  | '2MB-c1'
-  | '4MB'
-  | '4MB-c1'
-  | '8MB'
-  | '16MB'
-  | '32MB'
-  | '64MB'
-  | '128MB'
+type FlashFreqValues = 'keep' | '80m' | '60m' | '48m' | '40m' | '30m' | '26m' | '24m' | '20m' | '16m' | '15m' | '12m'
+type FlashSizeValues = 'detect' | 'keep' | '256KB' | '512KB' | '1MB' | '2MB' | '4MB' | '8MB' | '16MB' | '32MB' | '64MB' | '128MB'
 
-// Теперь data это Uint8Array, как требует новый API
+// Согласно API, data передается как Uint8Array
 type FlashFile = {
   data: Uint8Array
   address: number
@@ -64,59 +38,40 @@ function appendLog(message: string): void {
 
 async function fetchJson<T>(url: string): Promise<T> {
   const response = await fetch(url, { cache: 'no-store' })
-  if (!response.ok) {
-    throw new Error(`Не удалось загрузить JSON: ${url}`)
-  }
+  if (!response.ok) throw new Error(`Не удалось загрузить JSON: ${url}`)
   return (await response.json()) as T
 }
 
-// Функция загрузки теперь возвращает только Uint8Array
-async function fetchBinaryWithLogs(path: string): Promise<Uint8Array> {
+// Загружаем бинарники сразу в Uint8Array
+async function fetchBinary(path: string): Promise<Uint8Array> {
   const url = `/DarkForgeUI-site/firmware/${path}`
   const response = await fetch(url, { cache: 'no-store' })
-
-  appendLog(
-    `${path}: status=${response.status}, content-type=${response.headers.get('content-type') ?? 'unknown'}, content-length=${response.headers.get('content-length') ?? 'unknown'}`
-  )
-
-  if (!response.ok) {
-    throw new Error(`Не удалось загрузить бинарник: ${url}`)
-  }
-
+  if (!response.ok) throw new Error(`Не удалось загрузить бинарник: ${url}`)
+  
   const buffer = await response.arrayBuffer()
   const bytes = new Uint8Array(buffer)
-
-  appendLog(`Файл ${path}: ${bytes.length} bytes загружен успешно.`)
-
+  
+  appendLog(`Файл ${path} загружен (${bytes.length} байт)`)
   return bytes
 }
 
 async function connectAndFlash(): Promise<void> {
   try {
-    const nav = navigator as Navigator & {
-      serial?: {
-        requestPort: () => Promise<unknown>
-      }
-    }
-
-    if (!nav.serial) {
-      throw new Error('Web Serial API не поддерживается вашим браузером. Используйте Chrome или Edge.')
-    }
+    const nav = navigator as Navigator & { serial?: { requestPort: () => Promise<unknown> } }
+    if (!nav.serial) throw new Error('Web Serial API не поддерживается.')
 
     isFlashing.value = true
     progress.value = 0
     logLines.value = []
-    statusText.value = 'Запрос доступа к serial-порту...'
-
-    appendLog('Проверка Web Serial API...')
-    appendLog('Запрос порта у пользователя...')
+    statusText.value = 'Подключение...'
 
     const port = await nav.serial.requestPort()
     const transport = new Transport(port as any, true)
 
+    // Инициализация загрузчика согласно API
     esploader = new ESPLoader({
       transport,
-      baudrate: 460800, // Увеличил baudrate для скорости, как в issue
+      baudrate: 460800,
       terminal: {
         clean: () => {},
         writeLine: (data: string) => appendLog(data),
@@ -124,40 +79,25 @@ async function connectAndFlash(): Promise<void> {
       }
     } as any)
 
-    statusText.value = 'Подключение к ESP32-P4...'
-    appendLog('Инициализация ESPLoader...')
-
     const chip = await (esploader as any).main()
     appendLog(`Подключено к чипу: ${chip}`)
 
-    statusText.value = 'Загрузка плана прошивки...'
-    appendLog('Загрузка flash_args.json...')
-
+    statusText.value = 'Чтение манифеста...'
     const manifest = await fetchJson<FlashManifest>('/DarkForgeUI-site/firmware/flash_args.json')
 
-    appendLog(`Flash mode: ${manifest.flash_mode}`)
-    appendLog(`Flash freq: ${manifest.flash_freq}`)
-    appendLog(`Flash size: ${manifest.flash_size}`)
-    appendLog(`Количество файлов: ${manifest.files.length}`)
-
-    statusText.value = 'Загрузка бинарников прошивки...'
-
-    // Формируем массив файлов, передавая Uint8Array напрямую
+    statusText.value = 'Загрузка файлов...'
     const fileArray: FlashFile[] = await Promise.all(
-      manifest.files.map(async (file) => {
-        appendLog(`Загрузка ${file.path} @ 0x${file.address.toString(16).toUpperCase()}`)
-        const bytes = await fetchBinaryWithLogs(file.path)
-
-        return {
-          data: bytes,
-          address: file.address
-        }
-      })
+      manifest.files.map(async (file) => ({
+        data: await fetchBinary(file.path),
+        address: file.address
+      }))
     )
 
-    statusText.value = 'Идет прошивка...'
-    appendLog('Начинается запись во flash...')
+    statusText.value = 'Прошивка...'
+    appendLog('Запуск writeFlash...')
 
+    // Вызываем writeFlash строго по интерфейсу FlashOptions
+    // Библиотека сама загрузит Stub, отправит данные и сверит MD5
     await (esploader as any).writeFlash({
       fileArray,
       eraseAll: true,
@@ -165,18 +105,17 @@ async function connectAndFlash(): Promise<void> {
       flashMode: manifest.flash_mode as FlashModeValues,
       flashFreq: manifest.flash_freq as FlashFreqValues,
       flashSize: manifest.flash_size as FlashSizeValues,
-      reportProgress: (_fileIndex: number, written: number, total: number) => {
+      reportProgress: (fileIndex: number, written: number, total: number) => {
         progress.value = Math.round((written / total) * 100)
       }
-      // calculateMD5Hash больше не передаем! Библиотека сама посчитает его из Uint8Array
     })
 
-    appendLog('Запись завершена, выполняется after()...')
+    appendLog('Выполнение after()...')
     await (esploader as any).after()
 
     progress.value = 100
     statusText.value = 'Прошивка завершена! 🚀'
-    appendLog('Прошивка успешно завершена.')
+    
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error)
     statusText.value = `Ошибка: ${message}`
@@ -184,14 +123,8 @@ async function connectAndFlash(): Promise<void> {
     console.error(error)
   } finally {
     if (esploader) {
-      try {
-        appendLog('Отключение транспорта...')
-        await (esploader as any).transport.disconnect()
-      } catch (disconnectError: unknown) {
-        appendLog(`Ошибка отключения: ${String(disconnectError)}`)
-      }
+      await (esploader as any).transport.disconnect().catch(() => {})
     }
-
     isFlashing.value = false
   }
 }
@@ -229,142 +162,23 @@ async function connectAndFlash(): Promise<void> {
 </template>
 
 <style>
-/* Стили остались без изменений */
-body {
-  margin: 0;
-  background-color: #0d1117;
-  color: #c9d1d9;
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-}
-
-* {
-  box-sizing: border-box;
-}
-
-.darkforge-container {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  min-height: 100vh;
-  padding: 24px;
-}
-
-.card {
-  background: #161b22;
-  padding: 32px;
-  border-radius: 16px;
-  border: 1px solid #30363d;
-  text-align: center;
-  width: 100%;
-  max-width: 520px;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
-}
-
-.logo {
-  font-size: 30px;
-  font-weight: 800;
-  color: #58a6ff;
-  margin-bottom: 6px;
-  letter-spacing: -0.5px;
-}
-
-.subtitle {
-  margin: 0 0 18px;
-  color: #8b949e;
-  font-size: 14px;
-}
-
-.status {
-  margin-bottom: 20px;
-  font-size: 14px;
-  color: #c9d1d9;
-  min-height: 40px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-}
-
-.progress-wrap {
-  margin-bottom: 18px;
-}
-
-.progress-bg {
-  background: #21262d;
-  border-radius: 8px;
-  height: 12px;
-  overflow: hidden;
-}
-
-.progress-fill {
-  background: linear-gradient(90deg, #1f6feb, #58a6ff);
-  height: 100%;
-  transition: width 0.15s linear;
-  border-radius: 8px;
-}
-
-.progress-text {
-  font-size: 13px;
-  color: #58a6ff;
-  margin: 8px 0 0;
-  font-weight: 700;
-}
-
-button {
-  background: #238636;
-  color: #ffffff;
-  border: none;
-  padding: 14px 18px;
-  border-radius: 10px;
-  font-size: 16px;
-  font-weight: 700;
-  cursor: pointer;
-  width: 100%;
-  transition: all 0.2s ease;
-}
-
-button:hover:not(:disabled) {
-  background: #2ea043;
-  transform: translateY(-1px);
-}
-
-button:disabled {
-  background: #21262d;
-  color: #6e7681;
-  cursor: not-allowed;
-  transform: none;
-}
-
-.log-panel {
-  margin-top: 22px;
-  text-align: left;
-  border: 1px solid #30363d;
-  border-radius: 12px;
-  overflow: hidden;
-  background: #0d1117;
-}
-
-.log-title {
-  padding: 10px 12px;
-  font-size: 13px;
-  font-weight: 700;
-  color: #c9d1d9;
-  background: #161b22;
-  border-bottom: 1px solid #30363d;
-}
-
-.log-content {
-  max-height: 320px;
-  overflow: auto;
-  padding: 10px 12px;
-}
-
-.log-line {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 12px;
-  color: #8b949e;
-  line-height: 1.5;
-  word-break: break-word;
-  margin-bottom: 6px;
-}
+/* Стили остаются без изменений */
+body { margin: 0; background-color: #0d1117; color: #c9d1d9; font-family: 'Inter', sans-serif; }
+* { box-sizing: border-box; }
+.darkforge-container { display: flex; justify-content: center; align-items: center; min-height: 100vh; padding: 24px; }
+.card { background: #161b22; padding: 32px; border-radius: 16px; border: 1px solid #30363d; text-align: center; width: 100%; max-width: 520px; box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45); }
+.logo { font-size: 30px; font-weight: 800; color: #58a6ff; margin-bottom: 6px; letter-spacing: -0.5px; }
+.subtitle { margin: 0 0 18px; color: #8b949e; font-size: 14px; }
+.status { margin-bottom: 20px; font-size: 14px; color: #c9d1d9; min-height: 40px; display: flex; align-items: center; justify-content: center; text-align: center; }
+.progress-wrap { margin-bottom: 18px; }
+.progress-bg { background: #21262d; border-radius: 8px; height: 12px; overflow: hidden; }
+.progress-fill { background: linear-gradient(90deg, #1f6feb, #58a6ff); height: 100%; transition: width 0.15s linear; border-radius: 8px; }
+.progress-text { font-size: 13px; color: #58a6ff; margin: 8px 0 0; font-weight: 700; }
+button { background: #238636; color: #ffffff; border: none; padding: 14px 18px; border-radius: 10px; font-size: 16px; font-weight: 700; cursor: pointer; width: 100%; transition: all 0.2s ease; }
+button:hover:not(:disabled) { background: #2ea043; transform: translateY(-1px); }
+button:disabled { background: #21262d; color: #6e7681; cursor: not-allowed; transform: none; }
+.log-panel { margin-top: 22px; text-align: left; border: 1px solid #30363d; border-radius: 12px; overflow: hidden; background: #0d1117; }
+.log-title { padding: 10px 12px; font-size: 13px; font-weight: 700; color: #c9d1d9; background: #161b22; border-bottom: 1px solid #30363d; }
+.log-content { max-height: 320px; overflow: auto; padding: 10px 12px; }
+.log-line { font-family: monospace; font-size: 12px; color: #8b949e; line-height: 1.5; word-break: break-word; margin-bottom: 6px; }
 </style>
