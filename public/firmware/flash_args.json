@@ -7,8 +7,9 @@
     { "path": "partition-table.bin", "address": 40960 },
     { "path": "ota_data_initial.bin", "address": 73728 },
     { "path": "app.bin", "address": 131072 },
-    { "path": "srmodels.bin", "address": 25231360 },
+    { "path": "srmodels.bin", "address": 25362432 },
     { "path": "webserver.bin", "address": 26345472 },
     { "path": "storage.bin", "address": 30539776 }
   ]
 }
+
